@@ -1,0 +1,8 @@
+# Create a virtual environment
+python -m venv sailing-env
+
+# On macOS/Linux:
+source sailing-env/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
