@@ -6,6 +6,12 @@ These functions help create standalone Python files for agent submission.
 
 import os
 import numpy as np # type: ignore
+import torch
+import inspect
+import textwrap
+
+
+################ Q Learning Agent ################
 
 def save_qlearning_agent(agent, output_path, agent_class_name="QLearningTrainedAgent"):
     """
@@ -124,3 +130,86 @@ class {agent_class_name}(BaseAgent):
     print(f"Agent saved to {output_path}")
     print(f"The file contains {len(agent.q_table)} state-action pairs.")
     print(f"You can now use this file with validate_agent.ipynb and evaluate_agent.ipynb")
+
+
+
+################ DQN Agent ################
+
+def save_qdn_agent(agent, output_path, agent_class_name="QDNTrainedAgent"):
+    """
+    Save a trained DQN (Deep Q-Network) agent as a standalone Python file and a separate weights file.
+
+    Args:
+        agent: The trained DQN agent instance. Must have `model` attribute (PyTorch nn.Module).
+        output_path: Path to the output Python file (e.g., 'agents/qdn_agent.py').
+        agent_class_name: Name for the agent class in the saved file.
+
+    Returns:
+        None
+    """
+    # Create output directory if needed
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    # Define the path for saving the model weights
+    weights_path = os.path.splitext(output_path)[0] + "_weights.pth"
+
+    # Save the model weights
+    torch.save(agent.model.state_dict(), weights_path)
+
+    # Get the model class code (assumes it’s defined in user code)
+    model_class = agent.model.__class__
+    model_code = inspect.getsource(model_class)
+    model_code = textwrap.dedent(model_code)
+
+    # Start building the agent Python file content
+    file_content = f'''"""
+DQN Agent for the Sailing Challenge - Trained Model
+
+This file contains a DQN agent trained on the sailing environment.
+The model is a neural network saved separately in a .pth file.
+"""
+
+import torch
+import numpy as np
+import torch.nn as nn
+import torch.nn.functional as F
+from agents.base_agent import BaseAgent
+
+# Neural network model definition
+{model_code}
+
+class {agent_class_name}(BaseAgent):
+    \"\"\"A DQN agent trained on the sailing environment.\"\"\"
+    
+    def __init__(self):
+        super().__init__()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = {model_class.__name__}()
+        self.model.load_state_dict(torch.load("{os.path.basename(weights_path)}", map_location=self.device))
+        self.model.to(self.device)
+        self.model.eval()
+    
+    def act(self, observation):
+        \"\"\"Select the action with the highest Q-value from the model.\"\"\"
+        obs_tensor = torch.tensor(observation, dtype=torch.float32, device=self.device).unsqueeze(0)  # Shape: (1, obs_dim)
+        with torch.no_grad():
+            q_values = self.model(obs_tensor)
+        return int(torch.argmax(q_values, dim=1).item())
+    
+    def reset(self):
+        \"\"\"Reset the agent for a new episode.\"\"\"
+        pass  # Nothing to reset
+    
+    def seed(self, seed=None):
+        \"\"\"Set the random seed.\"\"\"
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+'''
+
+    # Write the Python agent file
+    with open(output_path, 'w') as f:
+        f.write(file_content)
+
+    print(f"Agent class saved to {output_path}")
+    print(f"Model weights saved to {weights_path}")
+    print("You can now use this agent with validate_agent.ipynb and evaluate_agent.ipynb.")

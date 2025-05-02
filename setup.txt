@@ -6,3 +6,7 @@ source sailing-env/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Before submission, run the following commands:
+python src/test_agent_validity.py path/to/your_agent.py
+python src/evaluate_submission.py path/to/your_agent.py -seeds 1
