@@ -55,7 +55,7 @@ class FCNet(torch.nn.Module):
     return self.linear_relu_stack(x)
 
 
-class NN(BaseEstimator):
+class NN(nn.Module):
   """
   A sklearn-like class for the neural net
   """
@@ -67,6 +67,7 @@ class NN(BaseEstimator):
     - Initialize the neural network model and record it in self.model
     - Initialize the Adam optimizer and record it in self.optimizer
     """
+    super().__init__()
     self.device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
     self.n_iterations = n_iterations
     self.alpha = alpha
@@ -258,7 +259,7 @@ class DQNAgent(BaseAgent):
     
     def save(self, path):
         if self.model is not None:
-            torch.save(self.model.model.state_dict(), path)
+            torch.save(self.model.state_dict(), path)
         else:
             print("No model found to save.")
 
