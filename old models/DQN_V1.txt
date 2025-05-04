@@ -1,0 +1,262 @@
+## DQN version 1 
+
+class FCNet(torch.nn.Module):
+  """
+  Define the Neural network with the __init__ and forward method.
+  It should define a fully connected
+  neural network with prescribed input size, hidden size and output size
+  """
+  def __init__(self, input_size, hidden_size, output_size) -> None:
+    super().__init__()
+    self.linear_relu_stack = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, output_size)
+            )
+
+  def forward(self, x):
+    return self.linear_relu_stack(x)
+
+
+class NN(nn.Module):
+  """
+  A sklearn-like class for the neural net
+  """
+  def __init__(self, n_iterations, input_size, hidden_size, output_size, alpha, seed, batch_size) -> None:
+    """
+    Initialize the sklearn class:
+    - Record the input parameters using
+    self.parameter = parameter
+    - Initialize the neural network model and record it in self.model
+    - Initialize the Adam optimizer and record it in self.optimizer
+    """
+    super().__init__()
+    self.device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+    self.n_iterations = n_iterations
+    self.alpha = alpha
+    self.input_size = input_size
+    self.hidden_size = hidden_size
+    self.output_size = output_size
+    self.seed = seed
+    self.batch_size = batch_size
+    self.model = FCNet(input_size, hidden_size, output_size).to(self.device)
+    self.optimizer = torch.optim.Adam(self.model.parameters(), lr=alpha)
+
+
+  def partial_fit(self, X, Y):
+    """Update parameters
+    - Convert numpy input data to torch
+    - Define the loss
+    - Find the gradient via automatic differentiation
+    - Perform a gradient update of the parameters
+
+    Parameters
+    ----------
+    X: np array of size (n, ds + da)
+      state-action pairs
+    Y: np array of size (n, 1)
+      Estimate of the state action value function
+    """
+    # DATA
+    Xs = torch.from_numpy(X[:, :-1].copy()).float().to(self.device)  # états
+    Xa = torch.from_numpy(X[:, -1].copy()).long().to(self.device)    # actions (indices)
+    if isinstance(Y, np.ndarray):
+        Y = torch.from_numpy(Y.copy()).float().to(self.device)
+    else:
+        Y = Y.float().to(self.device)
+
+    # LOSS
+    loss_fn = torch.nn.MSELoss()
+    Q_all = self(Xs)
+    Q_pred = Q_all[torch.arange(len(Xs)), Xa]
+    loss = loss_fn(Q_pred, Y)
+    loss.backward()
+    self.optimizer.step()
+    self.optimizer.zero_grad()
+
+
+  def fit(self, X, Y):
+    """Applies n_iterations steps of gradient using function grad_step.
+    At each iteration, all samples are shuffled and split into batches of size
+    `batch_size`.
+    The gradient steps are performed on each batch of data sequentially
+    """
+    idx_samples = np.arange(len(X))
+    for _ in range(self.n_iterations):
+      np.random.shuffle(idx_samples)
+      for batch_slice in gen_batches(len(X), self.batch_size):
+        Xb, Yb = X[idx_samples[batch_slice]].copy(), Y[idx_samples[batch_slice]].copy()
+        self.partial_fit(Xb, Yb)
+
+  def predict(self, X):
+    """Use the fitted parameter to predict q(s, a)
+    - Convert input data to Torch
+    - Apply the model
+    - Convert the output to numpy
+
+    Parameters
+    ---------
+    X: np array of shape (n, ds + da)
+    Return
+    ------
+    qSA: np array of shape (n,)
+      qSA[i] is an estimate of q(s_i, a_i) computed with the pred function
+      where s_i and a_i are given by X[i]
+    """
+    Xs = X[:, :-1]
+    Xa = X[:, -1]
+    with torch.no_grad():
+      Xs = torch.from_numpy(Xs.copy()).float().to(self.device)
+      Xa = torch.from_numpy(Xa.copy()).int().to(self.device)
+      y = self(Xs)[torch.arange(len(Xs)), Xa]
+    return y.cpu().numpy()
+  
+  def forward(self, x):
+    return self.model(x)
+
+class DQNAgent(BaseAgent):
+    """ DQN Agent """
+    
+    def __init__(self):
+        super().__init__()
+        self.device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+        self.d_s = 2054
+        self.n_actions = 9
+        self.pi = lambda x: np.random.randint(0, self.n_actions)
+        self.PI = None
+        self.capacity = 2000
+        self.batch_size = 200
+        self.eps = 0.5
+        self.gamma = 0.99
+        self.C = 20
+        self.n_iterations = 1000
+        self.nb_gradient_steps = 5  # Number of gradient steps after each iteration
+        self.model = NN(n_iterations=2,
+                        input_size=2054,
+                        hidden_size=24,
+                        output_size=env.action_space.n,
+                        alpha=0.001,
+                        batch_size=None,
+                        seed=0)
+        self.buffer = deque(maxlen=self.capacity)
+        self.target_model = deepcopy(self.model)
+        self.Qmax = None 
+        self.memory = []
+        self.criterion = torch.nn.SmoothL1Loss()
+        self.reset()
+
+    def sample(self):
+        batch = random.sample(self.buffer, self.batch_size)
+        return list(map(lambda x:torch.Tensor(np.array(x)).to(self.device), list(zip(*batch))))
+
+    def gradient_step(self, t):
+        if len(self.buffer) > self.batch_size:
+            I = np.random.randint(min(t+1, self.capacity), size=self.batch_size)
+            data = self.buffer[I]
+
+            # update target network if needed
+            if t % self.C == 0:
+                self.target_model = deepcopy(self.model)
+
+            Xb = data[:, :len(self.s) + 1]
+            Yb = data[:, len(self.s) + 1]
+
+            # Qmax update
+            if self.Qmax is None:
+                self.model.partial_fit(Xb, Yb)
+
+            self.Qmax = np.max(
+                            [self.target_model.predict(np.column_stack([data[:, len(self.s) + 3:], np.ones(len(data)).reshape(-1, 1) * a])) for a in range(n_actions)],
+                            axis=0)
+            Yb = data[:, len(self.s) + 1] + self.gamma * (1 - data[:, len(self.s) + 2]) * self.Qmax
+            Yb = torch.from_numpy(Yb.copy()).to(torch.float).to(self.model.device)
+            self.model.partial_fit(Xb, Yb)
+
+    def greedy_action(self, state):
+        q_values = [self.model.predict(np.array(state.tolist() + [a]).reshape(1, -1))[0] for a in range(self.n_actions)]
+        return np.argmax(q_values)
+    
+    def definePI(self):
+        def pi(s):
+            q = [self.model.predict(np.array(self.s.copy().tolist() + [a]).reshape(1,-1))[0] for a in range(self.n_actions)]
+            return np.argmax(q)
+        return lambda s: pi(s)
+
+    def trainDQN(self, path):
+        for name, wf in INITIAL_WINDFIELDS.items():
+            self.env = SailingEnv(**get_initial_windfield(name))
+            state, _ = self.env.reset()
+            epsilon = self.eps
+            self.s = state.copy()
+
+            for t in tqdm(range(self.n_iterations)):
+                # ε-greedy action
+                if np.random.rand() < epsilon:
+                    action = self.env.action_space.sample()
+                else:
+                    action = self.greedy_action(state)
+
+                next_state, reward, done, trunc, _ = self.env.step(action)
+                transition = state.tolist() + [action, reward, done] + next_state.tolist()
+                self.buffer.append(transition)
+
+                # Training
+                for _ in range(self.nb_gradient_steps):
+                    self.gradient_step(t)
+
+                state = self.env.reset()[0] if (done or trunc) else next_state
+                self.s = state.copy()
+
+        self.PI = self.definePI()
+        self.save(path)
+    
+    def act(self, observation: np.ndarray) -> int:
+        """ """
+        if self.PI is None:
+            print("The Agent has not been trained")
+        else:
+            return int(self.PI(observation))
+    
+    def reset(self) -> None:
+        """Reset the agent."""
+        self.s0, _ = env.reset()
+        self.s = self.s0.copy()
+    
+    def save(self, path):
+        if self.model is not None:
+            torch.save(self.model.state_dict(), path)
+        else:
+            print("No model found to save.")
+
+    def load(self, path="models/DQN"):
+        try:
+            self.model = NN(
+                n_iterations=1,
+                input_size=self.d_s,
+                hidden_size=24,
+                output_size=self.n_actions,
+                alpha=0.001,
+                batch_size=None,
+                seed=0
+            )
+            state_dict = torch.load(path, map_location=self.device)
+            self.model.load_state_dict(state_dict)
+            self.model.eval()
+            print(f"Model successfully loaded from {path}")
+        except FileNotFoundError:
+            print(f"Model file not found at {path}")
+            self.model = None
+        except Exception as e:
+            print(f"An error occurred during model loading: {e}")
+            self.model = None
+        self.PI = self.definePI() 
+    
+    def seed(self, seed: int = None) -> None:
+        """Set the random seed."""
+        self.np_random = np.random.default_rng(seed)
+
+agentDQN = DQNAgent()
+agentDQN.load()
+#agentDQN.trainDQN(path="models/DQN")
