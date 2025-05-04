@@ -135,7 +135,7 @@ class {agent_class_name}(BaseAgent):
 
 ################ DQN Agent ################
 
-def save_qdn_agent(agent, output_path, agent_class_name="QDNTrainedAgent"):
+def save_qdn_agent(agent, output_path, agent_class_name="DQNTrainedAgent"):
     """
     Save a trained DQN (Deep Q-Network) agent as a standalone Python file and a separate weights file.
 
